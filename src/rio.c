@@ -86,9 +86,41 @@ static ssize_t rio_read(rio_t *rp, void *usrbuf, size_t n){
 }
 
 ssize_t rio_readlineb(rio_t *rp, void *usrbuf, size_t maxlen){
-    
+    size_t n, rc;                                      // n: rio_read invocation times, rc: read count
+    char c, *bufptr = usrbuf;                       // c: read char buffer, *bufptr: next position
+
+    for(n=1; n<maxlen; n++){
+        if(1==(rc=rio_read(rp, &c, 1))){            // read a char to c
+            *bufptr = c;                            
+            bufptr ++;
+            if('\n' == c){
+                n++; break;
+            }
+        }else if(0==rc){                            // if n==1&&rc==0, return statement will be 1-1==0
+            break;
+        }else{
+            return -1;
+        }
+    }
+
+    if(n!=1) *bufptr = 0;                           // if there are bytes read, put the last char as '0'
+    return n-1;
 }
 
 ssize_t rio_readnb(rio_t *rp, void *usrbuf, size_t n){
-    
+    size_t nleft = n;
+    ssize_t nread = 0;
+    char* bufptr = usrbuf;
+
+    while(nleft > 0){
+        if((nread=rio_read(rp, bufptr, nleft))<0){
+            return -1;                              // there is no need to check errno, because it has been checked in rio_read
+        }else if(0==nread){
+            break;                                  
+        }
+        nleft -= nread;
+        bufptr += nread;
+    }
+
+    return n-nleft;
 }
