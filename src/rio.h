@@ -1,4 +1,6 @@
 #include<unistd.h>
+#include<sys/errno.h>
+#include<string.h>
 
 #ifndef RIO_H_HEADER
 #define RIO_H_HEADER   
@@ -7,7 +9,7 @@
 
 typedef struct {
     int rio_fd;                     //rio descriptor
-    int rio_cnt;                    //unread bytes in buf
+    int rio_cnt;                    //data bytes in buf
     char *rio_bufptr;               //next read position
     char rio_buf[RIO_BUFSIZE];      //buffer area
 } rio_t;
@@ -24,6 +26,5 @@ ssize_t rio_readlineb(rio_t *rp, void *usrbuf, size_t maxlen);
 
 /*read n bytes fromrio buffer to usr buffer*/
 ssize_t rio_readnb(rio_t *rp, void *usrbuf, size_t n);
-
 
 #endif
