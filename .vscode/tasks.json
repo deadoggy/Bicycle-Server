@@ -6,9 +6,11 @@
       "command": "/usr/bin/gcc",
       "args": [
         "-g",
+        "${fileDirname}/rio.c",
+        "${fileDirname}/bicyclewebserv.c",
         "${file}",
         "-o",
-        "${fileDirname}/${fileBasenameNoExtension}"
+        "${fileDirname}/../target/${fileBasenameNoExtension}"
       ],
       "options": {
         "cwd": "/usr/bin"

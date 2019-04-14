@@ -79,6 +79,7 @@ int open_listenfd(char *port){
 
 void process_http(int fd){
     int is_static;
+    size_t body_len;
     struct stat sbuf;
     char buf[MAXLINE], method[MAXLINE], uri[MAXLINE], version[MAXLINE];
     char filename[MAXLINE], cgiargs[MAXLINE];
@@ -97,10 +98,15 @@ void process_http(int fd){
         return;
     }
 
-    read_requesthdrs(&rio);
+    body_len = read_requesthdrs(&rio);
+    /*if there is no headers, don't response*/
+    if(0==body_len){                        
+        return;
+    }
 
     /*parse URI*/
     is_static = parse_uri(uri, filename, cgiargs);
+    // printf("[Debug] filename:%s\n", filename);
     if(stat(filename, &sbuf) < 0){
         clienterror(fd, method, "404", "NOT FOUND", "BICYCLE WEB SERVER COULD NOT FIND THIS FILE");
         return;
@@ -121,17 +127,19 @@ void process_http(int fd){
     }
 }
 
-void read_requesthdrs(rio_t *rp){
+size_t read_requesthdrs(rio_t *rp){
     //TODO: read request headers
     char buf[MAXLINE];
-
-    rio_readlineb(rp, buf, MAXLINE);
-    while(strcmp("\r\n", buf)){
-        rio_readlineb(rp, buf, MAXLINE);
+    memset(buf, 0, MAXLINE);
+    int rcnt;
+    size_t total_cnt = 0;
+    rcnt = rio_readlineb(rp, buf, MAXLINE);
+    while(strcmp("\r\n", buf) && rcnt!=0){
+        total_cnt += rcnt;
+        rcnt = rio_readlineb(rp, buf, MAXLINE);
         printf("%s", buf);
     }
-    return;
-
+    return total_cnt;
 }
 
 int parse_uri(char *uri, char *filename, char *cgiargs){
@@ -175,17 +183,17 @@ void get_filetype(char *filename, char *filetype){
     }
 }
 
-void servr_static(int fd, char *filename, size_t filesize){
+void serve_static(int fd, char *filename, size_t filesize){
     int srcfd;
     char *srcp, filetype[MAXLINE], buf[MAXLINE];
 
     /*send headers*/
     get_filetype(filename, filetype);
-    sprint(buf, "HTTP/1.0 200 OK\r\n");
+    sprintf(buf, "HTTP/1.0 200 OK\r\n");
     sprintf(buf, "%sServer: Bicycle Web Server", buf);
     sprintf(buf, "%sConnection: close\r\n", buf);
     sprintf(buf, "%sContent-length: %d\r\n", buf, filesize);
-    sprintf(buf, "%sContent-type: %s", buf, filetype);
+    sprintf(buf, "%sContent-type: %s\r\n\r\n", buf, filetype);
     rio_writen(fd, buf, strlen(buf));
 
     printf("Response headers:");
@@ -206,7 +214,7 @@ void serve_dynamic(int fd, char *filename, char * cgiargs){
     /*return head*/
     sprintf(buf, "HTTP/1.0 200 OK\r\n");
     sprintf(buf, "%sServer: Bicycle Web Server\r\n", buf);
-    rio_written(fd, buf, strlen(buf));
+    rio_writen(fd, buf, strlen(buf));
 
     /*fork a child process to execute the cgi program*/
     if(0==fork()){
@@ -232,4 +240,32 @@ void clienterror(int fd, char *cause, char *errnum, char *shortmsg, char *longms
     sprintf(buf, "%sCOntent-length: %d\r\n\r\n", buf, (int)strlen(body));
     rio_writen(fd, buf, strlen(buf));
     rio_writen(fd, body, strlen(body));
+}
+
+void ride_bicycle(int argc, char** argv){
+
+    int listenfd, connfd;
+    char hostname[MAXLINE], port[MAXLINE];
+    socklen_t clientlen;
+    struct sockaddr_storage clientaddr;
+
+    //TODO: init config from config file
+    if(argc!=2){
+        fprintf(stderr, "usage: %s <port>", argv[0]);
+        exit(1);
+    }
+
+    listenfd = open_listenfd(argv[1]);
+    printf("listening port: %s\n", argv[1]);
+    while(1){
+        clientlen = sizeof(clientaddr);
+        printf("Waiting for connection...\n");
+        connfd = accept(listenfd, (struct sockaddr *)&clientaddr, &clientlen);
+        printf("Accept!\n");
+        getnameinfo((struct sockaddr *)&clientaddr, clientlen, hostname, MAXLINE, port, MAXLINE, 0);
+        printf("Accepted connetion from (%s, %s)\n", hostname, port);
+        process_http(connfd);
+        close(connfd);
+    }
+
 }

@@ -1,5 +1,5 @@
-#include "rio.h"
-#include <stdio.h>
+#include"bicyclewebserv.h"
+
 int main(int argc, char** argv){
-    return 0;
+    ride_bicycle(argc, argv);
 }
