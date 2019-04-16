@@ -9,10 +9,12 @@
 #include<stdio.h>
 #include<fcntl.h>
 #include<sys/mman.h>
+#include <sys/time.h>
+#include<sys/select.h>
 #include "rio.h"
 
-
-
+#define DEFAULT_READ_TIMEOUT_SEC 1
+#define DEFAULT_READ_TIMEOUT_MCSEC 0
 #define DEFAULT_BACKLOG 1024
 #define DEFAULT_FILE_SLICE_SIZE 512
 #define MAXLINE 1024
@@ -40,7 +42,10 @@ void clienterror(int fd, char *cause, char *errnum,
 
 void init_file_slice(char* filename, file_slice* fs);          // init a file slice
 void destroy_file_slice(file_slice* fs);                       // destory a file_slice
-int next_slice(file_slice *fs);                                // get a file slice, return 1 if next slice exists, otherwise return -1
+int next_slice(file_slice *fs);                                // get a file slice, return 1 if get success, 0 for next slice doesn't exists, error return -1
+
+int timeout_check(rio_t *rp, int timeout_sec, 
+                            int timeout_msec);                 // 1 for ready to read, 0 for timeout and -1 for error
 
 void ride_bicycle(int argc, char** argv);                      // main logic of bicycle server
 

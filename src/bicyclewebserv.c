@@ -78,7 +78,7 @@ int open_listenfd(char *port){
 }
 
 void process_http(int fd){
-    int is_static;
+    int is_static, method_read_ret;
     size_t body_len;
     struct stat sbuf;
     char buf[MAXLINE], method[MAXLINE], uri[MAXLINE], version[MAXLINE];
@@ -88,6 +88,10 @@ void process_http(int fd){
 
     /*read request*/
     rio_initb(&rio, fd);
+    method_read_ret = timeout_check(&rio, DEFAULT_READ_TIMEOUT_SEC, DEFAULT_READ_TIMEOUT_MCSEC);
+    if(method_read_ret <= 0){
+        return ;
+    }
     rio_readlineb(&rio, buf, MAXLINE);
     printf("Headers: \n");
     printf("%s\n", buf);
@@ -134,7 +138,7 @@ size_t read_requesthdrs(rio_t *rp){
     int rcnt;
     size_t total_cnt = 0;
     rcnt = rio_readlineb(rp, buf, MAXLINE);
-    while(strcmp("\r\n", buf) && rcnt!=0){
+    while(strcmp("\r\n", buf) && rcnt>0){
         total_cnt += rcnt;
         rcnt = rio_readlineb(rp, buf, MAXLINE);
         printf("%s", buf);
@@ -156,7 +160,7 @@ int parse_uri(char *uri, char *filename, char *cgiargs){
         }
         return 1;
     }else{
-        ptr = index(uri, "?");
+        ptr = index(uri, '?');
         if(ptr){
             strcpy(cgiargs, ptr+1);
             *ptr = '\0';
@@ -195,7 +199,7 @@ void init_file_slice(char* filename, file_slice* fs){
     fs->slice_ptr = (char*) malloc(DEFAULT_FILE_SLICE_SIZE);
 }
 
-void destroy_file_sizle(file_slice* fs){
+void destroy_file_slice(file_slice* fs){
     free(fs->slice_ptr);
     fs->beg = -1;
     fs->cnt = -1;
@@ -204,22 +208,64 @@ void destroy_file_sizle(file_slice* fs){
 }
 
 int next_slice(file_slice *fs){
-    int rd_loc;
-    
+    int rd_loc = fs->beg;
+    char ch;
+
+    if(rd_loc >= fs->file_size){                        // next slice does not exists
+        return 0;
+    }
+
     fs->cnt = 0;
-    memset(fs->slice_ptr, 0, DEFAULT_FILE_SLICE_SIZE);
-    for(rd_loc=fs->beg;  rd_loc<fs->beg+DEFAULT_FILE_SLICE_SIZE; rd_loc++){
-        if(rd_loc >= fs->file_size){
-            return -1;
+    while(1){
+        if(rd_loc >= fs->file_size){                    // at the end of the file
+            break;
         }
         fseek(fs->fp, rd_loc, SEEK_SET);
-        fs->slice_ptr[fs->cnt++] = getc(fs->fp);
+        ch = getc(fs->fp);                              // get a character
+        if(ch==EOF){
+            if(errno == EINTR){                         // interrupted by sig handler return
+                continue;
+            }else{
+                memset(fs->slice_ptr, 0, fs->cnt);      // empty the area
+                fs->cnt = 0;
+                return -1;      
+            }
+        }else{
+            fs->slice_ptr[fs->cnt++] = ch;              // put a character into slice area and add 1 to count
+        }
+        rd_loc ++;
+        if(rd_loc>=fs->beg+DEFAULT_FILE_SLICE_SIZE){
+            break;
+        }
+    }
+    fs->beg = rd_loc;
+    return 1;
+}
+
+int timeout_check(rio_t *rp, int timeout_sec, int timeout_msec){
+    fd_set fds;
+    struct timeval to = {timeout_sec, timeout_msec};
+
+    FD_ZERO(&fds);
+    FD_SET(rp->rio_fd, &fds);
+    switch(select(rp->rio_fd+1, &fds, NULL, NULL, &to)){
+        case -1: 
+            return -1;
+        case 0: 
+            return 0;
+        default:
+            if(FD_ISSET(rp->rio_fd, &fds)){
+                return 1;
+            }else{
+                return -1;
+            }
     }
 }
 
 void serve_static(int fd, char *filename, size_t filesize){
-    int srcfd;
+    int slice_ret;
     char *srcp, filetype[MAXLINE], buf[MAXLINE];
+    file_slice fs;
 
     /*send headers*/
     get_filetype(filename, filetype);
@@ -240,7 +286,15 @@ void serve_static(int fd, char *filename, size_t filesize){
     // rio_writen(fd, srcp, filesize);
     // munmap(srcp, filesize);
 
-    
+    init_file_slice(filename, &fs);
+    while(1){
+        slice_ret = next_slice(&fs);
+        if(-1==slice_ret || 0==slice_ret){
+            break;
+        }
+        rio_writen(fd, fs.slice_ptr, fs.cnt);
+    }
+    destroy_file_slice(&fs);
 
 }
 
@@ -249,14 +303,15 @@ void serve_dynamic(int fd, char *filename, char * cgiargs){
 
     /*return head*/
     sprintf(buf, "HTTP/1.0 200 OK\r\n");
-    sprintf(buf, "%sServer: Bicycle Web Server\r\n", buf);
+    sprintf(buf, "%sServer: Bicycle Web Server\r\n\r\n", buf);
     rio_writen(fd, buf, strlen(buf));
 
     /*fork a child process to execute the cgi program*/
     if(0==fork()){
         setenv("QUERY_STRING", cgiargs, 1);
         dup2(fd, STDOUT_FILENO);                // redirect stdout to client
-        execve(filename, emptylist, NULL);
+        execv(filename, emptylist);
+        fflush(STDOUT_FILENO);
     }
     wait(NULL);
 }

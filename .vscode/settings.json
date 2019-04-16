@@ -3,6 +3,7 @@
         "netdb.h": "c"
     },
     "C_Cpp.default.defines": [
-        "_GNU_SOURCE"
+        "_GNU_SOURCE",
+        "_POSIX_C_SOURCE=200112L"
     ]
 }
