@@ -54,6 +54,7 @@ void rio_initb(rio_t *rp, int fd){
     rp->rio_fd = fd;
     rp->rio_cnt = 0;
     rp->rio_bufptr = rp->rio_buf;
+    memset(rp->rio_buf, 0, RIO_BUFSIZE);
 }
 
 /*read n bytes from buffer to usrbuf, this function can not be open to other files*/

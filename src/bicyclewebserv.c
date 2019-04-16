@@ -183,6 +183,40 @@ void get_filetype(char *filename, char *filetype){
     }
 }
 
+void init_file_slice(char* filename, file_slice* fs){
+    struct stat statbuf;
+    
+    fs->fp = fopen(filename, "rb");
+    // get file size
+    stat(filename, &statbuf);
+    fs->file_size = statbuf.st_size;
+    fs->beg = 0;
+    fs->cnt = 0;
+    fs->slice_ptr = (char*) malloc(DEFAULT_FILE_SLICE_SIZE);
+}
+
+void destroy_file_sizle(file_slice* fs){
+    free(fs->slice_ptr);
+    fs->beg = -1;
+    fs->cnt = -1;
+    fs->file_size = -1;
+    close(fs->fp);
+}
+
+int next_slice(file_slice *fs){
+    int rd_loc;
+    
+    fs->cnt = 0;
+    memset(fs->slice_ptr, 0, DEFAULT_FILE_SLICE_SIZE);
+    for(rd_loc=fs->beg;  rd_loc<fs->beg+DEFAULT_FILE_SLICE_SIZE; rd_loc++){
+        if(rd_loc >= fs->file_size){
+            return -1;
+        }
+        fseek(fs->fp, rd_loc, SEEK_SET);
+        fs->slice_ptr[fs->cnt++] = getc(fs->fp);
+    }
+}
+
 void serve_static(int fd, char *filename, size_t filesize){
     int srcfd;
     char *srcp, filetype[MAXLINE], buf[MAXLINE];
@@ -191,7 +225,7 @@ void serve_static(int fd, char *filename, size_t filesize){
     get_filetype(filename, filetype);
     sprintf(buf, "HTTP/1.0 200 OK\r\n");
     sprintf(buf, "%sServer: Bicycle Web Server", buf);
-    sprintf(buf, "%sConnection: close\r\n", buf);
+    // sprintf(buf, "%sConnection: close\r\n", buf);
     sprintf(buf, "%sContent-length: %d\r\n", buf, filesize);
     sprintf(buf, "%sContent-type: %s\r\n\r\n", buf, filetype);
     rio_writen(fd, buf, strlen(buf));
@@ -199,12 +233,14 @@ void serve_static(int fd, char *filename, size_t filesize){
     printf("Response headers:");
     printf("%s", buf);
 
-    /*send body*/
-    srcfd = open(filename, O_RDONLY, 0);
-    srcp = mmap(0, filesize, PROT_READ, MAP_PRIVATE, srcfd, 0); //PORT_READ: can be read; MAP_PRIVATE: do not share this map with other processes
-    close(srcfd);
-    rio_writen(fd, srcp, filesize);
-    munmap(srcp, filesize);
+    /*send body using munmap*/
+    // srcfd = open(filename, O_RDONLY, 0);
+    // srcp = mmap(0, filesize, PROT_READ, MAP_PRIVATE, srcfd, 0); //PORT_READ: can be read; MAP_PRIVATE: do not share this map with other processes
+    // close(srcfd);
+    // rio_writen(fd, srcp, filesize);
+    // munmap(srcp, filesize);
+
+    
 
 }
 
@@ -222,6 +258,7 @@ void serve_dynamic(int fd, char *filename, char * cgiargs){
         dup2(fd, STDOUT_FILENO);                // redirect stdout to client
         execve(filename, emptylist, NULL);
     }
+    wait(NULL);
 }
 
 void clienterror(int fd, char *cause, char *errnum, char *shortmsg, char *longmsg){
