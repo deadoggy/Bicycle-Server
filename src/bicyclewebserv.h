@@ -11,6 +11,9 @@
 #include<sys/mman.h>
 #include <sys/time.h>
 #include<sys/select.h>
+#include<signal.h>
+#include<sys/wait.h>
+#include<stdio.h>
 #include "rio.h"
 
 #define DEFAULT_READ_TIMEOUT_SEC 1
@@ -22,11 +25,14 @@
 
 typedef struct {
     FILE* fp;
+    int fd;
     size_t file_size;
     size_t beg;
     size_t cnt;
-    char* slice_ptr;
+    unsigned char* slice_ptr;
 } file_slice;
+
+volatile __sig_atomic_t cgi_pid;
 
 int open_clientfd(char *hostname, char *port);                 // open a client, encapsulate getaddrinfo
 int open_listenfd(char* port);                                 // open a listen socket, encapsulate getaddrinfo
@@ -46,6 +52,9 @@ int next_slice(file_slice *fs);                                // get a file sli
 
 int timeout_check(rio_t *rp, int timeout_sec, 
                             int timeout_msec);                 // 1 for ready to read, 0 for timeout and -1 for error
+
+void cgi_chdpro_handler(int sig);                              // a child process handler function
+void sigpipe_handler(int sig);                                 // process sigpipe
 
 void ride_bicycle(int argc, char** argv);                      // main logic of bicycle server
 

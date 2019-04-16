@@ -77,6 +77,13 @@ int open_listenfd(char *port){
     return listenfd;
 }
 
+void sigpipe_handler(int sig){
+    if(errno == EPIPE){
+        errno = 0;
+    }
+    printf("SIGPIPE received\n");
+}
+
 void process_http(int fd){
     int is_static, method_read_ret;
     size_t body_len;
@@ -85,6 +92,9 @@ void process_http(int fd){
     char filename[MAXLINE], cgiargs[MAXLINE];
     rio_t rio;
 
+
+    /*register sigpipe handler function*/
+    signal(SIGPIPE, sigpipe_handler);
 
     /*read request*/
     rio_initb(&rio, fd);
@@ -182,6 +192,8 @@ void get_filetype(char *filename, char *filetype){
         strcpy(filetype, "image/png");
     }else if(strstr(filename, ".jpg")){
         strcpy(filetype, "image/jpeg");
+    }else if(strstr(filename, ".pdf")){
+        strcpy(filetype, "application/pdf");
     }else{
         strcpy(filetype, "text/plain");
     }
@@ -191,12 +203,13 @@ void init_file_slice(char* filename, file_slice* fs){
     struct stat statbuf;
     
     fs->fp = fopen(filename, "rb");
+    fs->fd = fileno(fs->fp);
     // get file size
     stat(filename, &statbuf);
     fs->file_size = statbuf.st_size;
     fs->beg = 0;
     fs->cnt = 0;
-    fs->slice_ptr = (char*) malloc(DEFAULT_FILE_SLICE_SIZE);
+    fs->slice_ptr = (unsigned char*) malloc(DEFAULT_FILE_SLICE_SIZE);
 }
 
 void destroy_file_slice(file_slice* fs){
@@ -209,37 +222,30 @@ void destroy_file_slice(file_slice* fs){
 
 int next_slice(file_slice *fs){
     int rd_loc = fs->beg;
-    char ch;
+    int nrd =0, nleft = DEFAULT_FILE_SLICE_SIZE;
 
     if(rd_loc >= fs->file_size){                        // next slice does not exists
         return 0;
     }
-
     fs->cnt = 0;
-    while(1){
-        if(rd_loc >= fs->file_size){                    // at the end of the file
-            break;
-        }
+    while(nleft>0){
         fseek(fs->fp, rd_loc, SEEK_SET);
-        ch = getc(fs->fp);                              // get a character
-        if(ch==EOF){
-            if(errno == EINTR){                         // interrupted by sig handler return
-                continue;
-            }else{
-                memset(fs->slice_ptr, 0, fs->cnt);      // empty the area
-                fs->cnt = 0;
-                return -1;      
+        //if((nrd=rio_readn(fs->fd, fs->slice_ptr, DEFAULT_FILE_SLICE_SIZE))<0){
+        if((nrd=fread(fs->slice_ptr, sizeof(unsigned char), DEFAULT_FILE_SLICE_SIZE, fs->fp))<0){
+            if(errno==SIGINT) continue;
+            else{
+                return -1;
             }
-        }else{
-            fs->slice_ptr[fs->cnt++] = ch;              // put a character into slice area and add 1 to count
         }
-        rd_loc ++;
-        if(rd_loc>=fs->beg+DEFAULT_FILE_SLICE_SIZE){
+        else if(0==nrd){
             break;
         }
+        fs->cnt += nrd;
+        rd_loc += nrd;
+        nleft -= nrd;
     }
     fs->beg = rd_loc;
-    return 1;
+    return fs->cnt;
 }
 
 int timeout_check(rio_t *rp, int timeout_sec, int timeout_msec){
@@ -263,15 +269,15 @@ int timeout_check(rio_t *rp, int timeout_sec, int timeout_msec){
 }
 
 void serve_static(int fd, char *filename, size_t filesize){
-    int slice_ret;
+    int slice_ret, nrd;
     char *srcp, filetype[MAXLINE], buf[MAXLINE];
     file_slice fs;
 
     /*send headers*/
     get_filetype(filename, filetype);
-    sprintf(buf, "HTTP/1.0 200 OK\r\n");
-    sprintf(buf, "%sServer: Bicycle Web Server", buf);
-    // sprintf(buf, "%sConnection: close\r\n", buf);
+    sprintf(buf, "HTTP/1.1 200 OK\r\n");
+    sprintf(buf, "%sServer: Bicycle Web Server\r\n", buf);
+    sprintf(buf, "%sConnection: keep-alive\r\n", buf);
     sprintf(buf, "%sContent-length: %d\r\n", buf, filesize);
     sprintf(buf, "%sContent-type: %s\r\n\r\n", buf, filetype);
     rio_writen(fd, buf, strlen(buf));
@@ -289,7 +295,7 @@ void serve_static(int fd, char *filename, size_t filesize){
     init_file_slice(filename, &fs);
     while(1){
         slice_ret = next_slice(&fs);
-        if(-1==slice_ret || 0==slice_ret){
+        if(-1==slice_ret||0==slice_ret){
             break;
         }
         rio_writen(fd, fs.slice_ptr, fs.cnt);
@@ -298,22 +304,53 @@ void serve_static(int fd, char *filename, size_t filesize){
 
 }
 
+void cgi_chdpro_handler(int sig){
+    int olderrno = errno;
+    cgi_pid = waitpid(-1, NULL, 0);
+    errno = olderrno;
+    printf("SIGCHLD received\n");
+}
+
 void serve_dynamic(int fd, char *filename, char * cgiargs){
     char buf[MAXLINE], *emptylist[] = {NULL};
-
+    sigset_t mask, prev;
+    
     /*return head*/
     sprintf(buf, "HTTP/1.0 200 OK\r\n");
     sprintf(buf, "%sServer: Bicycle Web Server\r\n\r\n", buf);
     rio_writen(fd, buf, strlen(buf));
 
     /*fork a child process to execute the cgi program*/
+    signal(SIGCHLD, cgi_chdpro_handler);
+    sigemptyset(&mask);
+    sigaddset(&mask, SIGCHLD);
+
+    sigprocmask(SIG_BLOCK, &mask, &prev);
     if(0==fork()){
         setenv("QUERY_STRING", cgiargs, 1);
         dup2(fd, STDOUT_FILENO);                // redirect stdout to client
         execv(filename, emptylist);
-        fflush(STDOUT_FILENO);
     }
-    wait(NULL);
+
+    cgi_pid = 0;
+    while(!cgi_pid){
+        /*
+            sigsuspend() temporarily replaces the signal mask of the calling
+            thread with the mask given by mask and then suspends the thread until
+            delivery of a signal whose action is to invoke a signal handler or to
+            terminate a process.
+
+            If the signal terminates the process, then sigsuspend() does not
+            return.  If the signal is caught, then sigsuspend() returns after the
+            signal handler returns, and the signal mask is restored to the state
+            before the call to sigsuspend().
+
+            It is not possible to block SIGKILL or SIGSTOP; specifying these
+            signals in mask, has no effect on the thread's signal mask.
+        */
+        sigsuspend(&prev);
+        sigprocmask(SIG_SETMASK, &prev, NULL);  // after return of sigsuspend, mask restore to <mask>; so needed to be recover to prev
+    }
 }
 
 void clienterror(int fd, char *cause, char *errnum, char *shortmsg, char *longmsg){

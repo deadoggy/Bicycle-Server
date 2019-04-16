@@ -3,7 +3,7 @@
 
 ssize_t rio_readn(int fd, void *usrbuf, size_t n){
     size_t nleft = n;                               // size of unread bytes
-    char *tgtptr = usrbuf;                          // target buf pointer
+    char *tgtptr = (char*)usrbuf;                          // target buf pointer
     ssize_t nread = 0;                              // size of read bytes returned by read()
 
     while(nleft > 0){
