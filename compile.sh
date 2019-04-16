@@ -2,6 +2,10 @@
 
 cp -r resource/. target/
 
+if [ ! -d "target/" ]; then 
+    mkdir target/
+fi
+
 if [ ! -d "target/cgi-bin" ]; then 
     mkdir target/cgi-bin
 fi
