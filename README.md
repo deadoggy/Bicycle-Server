@@ -43,6 +43,7 @@ Programs and static resources will be in the ./target
 3. Use SIGCHLD and signal to process cgi children process
 4. Use malloc, fread and rio_writen to upload static resources
 5. Use random access and divide big files into slices during responding static requests in order to save main memory
+6. Range headers
 
 ## Confuse:
 
