@@ -321,10 +321,13 @@ void serve_static(int fd, char *filename, size_t filesize, char** headers, int h
     fs.beg = beg;
     while(1){
         slice_ret = next_slice(&fs);
-        if(-1==slice_ret||0==slice_ret||fs.beg-fs.cnt>end){
+        if(-1==slice_ret||0==slice_ret){
             break;
         }else{
             rio_writen(fd, fs.slice_ptr, fs.cnt<end-(fs.beg-fs.cnt)?fs.cnt:end-(fs.beg-fs.cnt));
+            if(fs.beg>end){ // [beg, end) has been read, break
+                break;
+            }
         }
         
     }
