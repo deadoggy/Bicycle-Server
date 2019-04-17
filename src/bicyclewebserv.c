@@ -86,10 +86,11 @@ void sigpipe_handler(int sig){
 
 void process_http(int fd){
     int is_static, method_read_ret;
-    size_t body_len;
+    int hdr_len;
     struct stat sbuf;
     char buf[MAXLINE], method[MAXLINE], uri[MAXLINE], version[MAXLINE];
     char filename[MAXLINE], cgiargs[MAXLINE];
+    char  **headers[MAX_HEADERS_SIZE];
     rio_t rio;
 
 
@@ -112,9 +113,9 @@ void process_http(int fd){
         return;
     }
 
-    body_len = read_requesthdrs(&rio);
+    hdr_len = read_requesthdrs(&rio, headers);
     /*if there is no headers, don't response*/
-    if(0==body_len){                        
+    if(0==hdr_len){                        
         return;
     }
 
@@ -131,29 +132,31 @@ void process_http(int fd){
             clienterror(fd, method, "403", "FORBIDDEN", "BICYCLE WEB SERVER COULD NOT READ THIS FILE");
             return;
         }
-        serve_static(fd, filename, sbuf.st_size);
+        serve_static(fd, filename, sbuf.st_size, headers, hdr_len);
     }else {
         if( !(S_ISREG(sbuf.st_mode)) || !(S_IXUSR&sbuf.st_mode)){ // S_ISREG: whether a regualr file; S_IXUSR: whether can be executed by this user
             clienterror(fd, method, "403", "FORBIDDEN", "BICYCLE WEB SERVER COULD NOT EXECUTE THIS FILE");
             return;
         }
-        serve_dynamic(fd, filename, cgiargs);
+        serve_dynamic(fd, filename, cgiargs, headers, hdr_len);
     }
 }
 
-size_t read_requesthdrs(rio_t *rp){
+size_t read_requesthdrs(rio_t *rp, char ** headers){
     //TODO: read request headers
     char buf[MAXLINE];
+    int hdr_cnt = 0;
     memset(buf, 0, MAXLINE);
     int rcnt;
-    size_t total_cnt = 0;
+
     rcnt = rio_readlineb(rp, buf, MAXLINE);
     while(strcmp("\r\n", buf) && rcnt>0){
-        total_cnt += rcnt;
+        headers[hdr_cnt] = (char*)malloc(strlen(buf) * sizeof(char) + 1);
+        strcpy(headers[hdr_cnt++], buf);
         rcnt = rio_readlineb(rp, buf, MAXLINE);
         printf("%s", buf);
     }
-    return total_cnt;
+    return hdr_cnt;
 }
 
 int parse_uri(char *uri, char *filename, char *cgiargs){
@@ -268,40 +271,64 @@ int timeout_check(rio_t *rp, int timeout_sec, int timeout_msec){
     }
 }
 
-void serve_static(int fd, char *filename, size_t filesize){
-    int slice_ret, nrd;
-    char *srcp, filetype[MAXLINE], buf[MAXLINE];
+void serve_static(int fd, char *filename, size_t filesize, char** headers, int hdr_size){
+    int slice_ret, nrd, beg, end;
+    char *srcp, filetype[MAXLINE], buf[MAXLINE], *needle_1, *needle_2;
     file_slice fs;
+
+    beg = 0;
+    end = filesize;
+    for(int i=0; i<hdr_size; i++){
+        if(strcasestr(headers[i], "range")!=NULL){
+            needle_1 = index(headers[i], ':') + 1;
+            needle_2 = index(needle_1, '-');
+            if(needle_2==0){
+                continue;
+            }
+            *needle_2 = '\0';
+            needle_2 ++;
+            beg = atoi(needle_1);
+            if(*needle_2 != '\r'){
+                end = atoi(needle_2);
+            }  
+        }
+    }
 
     /*send headers*/
     get_filetype(filename, filetype);
     sprintf(buf, "HTTP/1.1 200 OK\r\n");
     sprintf(buf, "%sServer: Bicycle Web Server\r\n", buf);
     sprintf(buf, "%sConnection: keep-alive\r\n", buf);
-    sprintf(buf, "%sContent-length: %d\r\n", buf, filesize);
-    sprintf(buf, "%sContent-type: %s\r\n\r\n", buf, filetype);
+    sprintf(buf, "%sContent-length: %d\r\n", buf, end - beg);
+    sprintf(buf, "%sContent-type: %s\r\n", buf, filetype);
+    sprintf(buf, "%sContent-range: %d-%d/%d\r\n\r\n", buf, beg, end, filesize+1);
     rio_writen(fd, buf, strlen(buf));
 
-    printf("Response headers:");
+    printf("Response headers:\n");
     printf("%s", buf);
+
+    
 
     /*send body using munmap*/
     // srcfd = open(filename, O_RDONLY, 0);
-    // srcp = mmap(0, filesize, PROT_READ, MAP_PRIVATE, srcfd, 0); //PORT_READ: can be read; MAP_PRIVATE: do not share this map with other processes
+    // srcp = mmap(beg, end - beg, PROT_READ, MAP_PRIVATE, srcfd, 0); //PORT_READ: can be read; MAP_PRIVATE: do not share this map with other processes
     // close(srcfd);
     // rio_writen(fd, srcp, filesize);
     // munmap(srcp, filesize);
 
     init_file_slice(filename, &fs);
+    fseek(fs.fp, beg, SEEK_SET);
+    fs.beg = beg;
     while(1){
         slice_ret = next_slice(&fs);
-        if(-1==slice_ret||0==slice_ret){
+        if(-1==slice_ret||0==slice_ret||fs.beg-fs.cnt>end){
             break;
+        }else{
+            rio_writen(fd, fs.slice_ptr, fs.cnt<end-(fs.beg-fs.cnt)?fs.cnt:end-(fs.beg-fs.cnt));
         }
-        rio_writen(fd, fs.slice_ptr, fs.cnt);
+        
     }
     destroy_file_slice(&fs);
-
 }
 
 void cgi_chdpro_handler(int sig){
@@ -311,7 +338,7 @@ void cgi_chdpro_handler(int sig){
     printf("SIGCHLD received\n");
 }
 
-void serve_dynamic(int fd, char *filename, char * cgiargs){
+void serve_dynamic(int fd, char *filename, char * cgiargs, char** headers, int hdr_size){
     char buf[MAXLINE], *emptylist[] = {NULL};
     sigset_t mask, prev;
     
