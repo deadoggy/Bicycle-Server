@@ -220,7 +220,7 @@ void destroy_file_slice(file_slice* fs){
     fs->beg = -1;
     fs->cnt = -1;
     fs->file_size = -1;
-    close(fs->fp);
+    close(fs->fd);
 }
 
 int next_slice(file_slice *fs){
