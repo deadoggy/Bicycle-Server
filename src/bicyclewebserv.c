@@ -311,9 +311,9 @@ void serve_static(int fd, char *filename, size_t filesize, char** headers, int h
 
     /*send body using munmap*/
     // srcfd = open(filename, O_RDONLY, 0);
-    // srcp = mmap(beg, end - beg, PROT_READ, MAP_PRIVATE, srcfd, 0); //PORT_READ: can be read; MAP_PRIVATE: do not share this map with other processes
+    // srcp = mmap(0, end - beg, PROT_READ, MAP_PRIVATE, srcfd, beg); //PORT_READ: can be read; MAP_PRIVATE: do not share this map with other processes
     // close(srcfd);
-    // rio_writen(fd, srcp, filesize);
+    // rio_writen(fd, srcp, end - beg);
     // munmap(srcp, filesize);
 
     init_file_slice(filename, &fs);
