@@ -10,7 +10,7 @@ A web server implemented during the class "Linux Kernal Analysis".
     ├── README.md
     ├── resource
     ├── src
-    └── target
+    └── target(after compiling)
 
 1. compile.sh: shell script for compiling
 2. resource: dictionary which stores static resources, all files/dict in this folder will be copied to target
